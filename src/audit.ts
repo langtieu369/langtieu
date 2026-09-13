@@ -1,0 +1,4 @@
+import {auditCatalog,ITEMS,LOCATIONS,RECIPES,BOSSES,SECRET_REALMS,REALMS} from './config/GameCatalog';import {auditSystemAccess,FEATURES,UI_ACTIONS} from './config/SystemRegistry';
+const catalog=auditCatalog(),access=auditSystemAccess();
+console.log(`Cảnh giới: ${REALMS.length}`);console.log(`Vật phẩm: ${Object.keys(ITEMS).length}`);console.log(`Địa vực: ${LOCATIONS.length}`);console.log(`Công thức: ${RECIPES.length}`);console.log(`Cường địch: ${BOSSES.length}`);console.log(`Bí cảnh: ${SECRET_REALMS.length}`);console.log(`Hệ thống có lối vào: ${FEATURES.length}/${FEATURES.length}`);console.log(`UI actions: ${UI_ACTIONS.length}`);
+if(catalog.length||access.length){console.error([...catalog,...access].join('\n'));process.exit(1)}console.log('✅ Audit hoàn tất: 0 lỗi nguồn vật phẩm, 0 hệ thống mất lối vào.');

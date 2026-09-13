@@ -1,0 +1,2 @@
+import { config } from './config';import { TuTienClient } from './client/TuTienClient';import { onReady } from './events/ready';import { onInteraction } from './events/interactionCreate';
+if(!config.token){console.error('❌ Thiếu DISCORD_TOKEN');process.exit(1);}const client=new TuTienClient();client.once('ready',()=>onReady(client).catch(console.error));client.on('interactionCreate',i=>onInteraction(client,i).catch(console.error));client.start(config.token).catch(console.error);
