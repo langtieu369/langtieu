@@ -1,0 +1,27 @@
+{
+  "name": "thuong-mang-thien-ha-v2",
+  "version": "2.3.0",
+  "description": "Discord Components V2 xianxia bot - Thương Mang Thiên Hạ",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "audit": "node dist/audit.js",
+    "check": "npm run build && npm run audit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.6.0",
+    "discord.js": "^14.26.4",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.10",
+    "@types/node": "^20.14.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
