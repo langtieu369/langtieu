@@ -1,0 +1,42 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.playerSectService = void 0;
+const crypto_1 = require("crypto");
+const database_1 = __importDefault(require("../database/database"));
+const InventoryRepository_1 = require("../database/repositories/InventoryRepository");
+const GameCatalog_1 = require("../config/GameCatalog");
+const RuntimeKernelService_1 = require("./RuntimeKernelService");
+const now = () => Date.now(), day = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+const permissions = (...x) => JSON.stringify(x);
+exports.playerSectService = {
+    create(founderId, name, receiptKey) { const prior = database_1.default.prepare("SELECT result_json FROM operation_receipts WHERE receipt_key=? AND status='COMMITTED'").get(receiptKey); if (prior)
+        return JSON.parse(prior.result_json); name = name.trim(); if (name.length < 2 || name.length > 24)
+        return { ok: false, message: 'Tên Tông Môn cần từ 2–24 ký tự.' }; if (database_1.default.prepare('SELECT 1 FROM sect_memberships WHERE user_id=?').get(founderId))
+        return { ok: false, message: 'Phải ly môn và hoàn tất 24 giờ điều tức trước khi lập môn.' }; const cd = database_1.default.prepare('SELECT available_at FROM sect_leave_cooldowns WHERE user_id=?').get(founderId); if (cd && cd.available_at > now())
+        return { ok: false, message: 'Thời gian điều tức 24 giờ chưa kết thúc.' }; try {
+        return RuntimeKernelService_1.runtimeKernel.execute(receiptKey, 'PLAYER_SECT', founderId, 'CREATE', () => { const id = `ps:${(0, crypto_1.randomUUID)()}`; database_1.default.prepare('INSERT INTO player_sects(id,name,founder_id,created_at) VALUES(?,?,?,?)').run(id, name, founderId, now()); const q = database_1.default.prepare('INSERT INTO player_sect_roles(sect_id,role_id,name,rank,permissions_json) VALUES(?,?,?,?,?)'); q.run(id, 'tong_chu', 'Tông Chủ', 100, permissions('ALL')); q.run(id, 'truong_lao', 'Trưởng Lão', 70, permissions('INVITE', 'MISSION', 'WAREHOUSE_DEPOSIT')); q.run(id, 'noi_mon', 'Nội Môn', 30, permissions('MISSION', 'WAREHOUSE_DEPOSIT')); q.run(id, 'mon_do', 'Môn Đồ', 10, permissions('MISSION', 'WAREHOUSE_DEPOSIT')); for (const b of ['dai_dien', 'tang_kinh_cac', 'luyen_khi_phong', 'duoc_vien', 'nhiem_vu_duong'])
+            database_1.default.prepare('INSERT INTO player_sect_buildings(sect_id,building_id,level,updated_at) VALUES(?,?,?,?)').run(id, b, b === 'dai_dien' ? 1 : 0, now()); database_1.default.prepare('INSERT INTO sect_memberships(user_id,sect_id,role_id,joined_at) VALUES(?,?,\'tong_chu\',?)').run(founderId, id, now()); return { ok: true, id, message: `Đã khai lập **${name}**.` }; }).value;
+    }
+    catch (e) {
+        return { ok: false, message: e.message.includes('UNIQUE') ? 'Tên Tông Môn đã tồn tại.' : String(e.message) };
+    } },
+    info(uid) { const m = database_1.default.prepare('SELECT * FROM sect_memberships WHERE user_id=?').get(uid); if (!m || !m.sect_id.startsWith('ps:'))
+        return null; const sect = database_1.default.prepare('SELECT * FROM player_sects WHERE id=?').get(m.sect_id); return { sect, membership: m, buildings: database_1.default.prepare('SELECT * FROM player_sect_buildings WHERE sect_id=?').all(m.sect_id), members: database_1.default.prepare('SELECT m.*,u.name FROM sect_memberships m JOIN users u ON u.discord_id=m.user_id WHERE m.sect_id=?').all(m.sect_id), missions: database_1.default.prepare("SELECT * FROM player_sect_missions WHERE sect_id=? AND status='ACTIVE'").all(m.sect_id) }; },
+    leave(uid) { const m = database_1.default.prepare('SELECT * FROM sect_memberships WHERE user_id=?').get(uid); if (!m)
+        return { ok: false, message: 'Chưa gia nhập Tông Môn.' }; if (m.role_id === 'tong_chu' && database_1.default.prepare('SELECT COUNT(*) n FROM sect_memberships WHERE sect_id=?').get(m.sect_id).n > 1)
+        return { ok: false, message: 'Tông Chủ phải truyền vị hoặc giải tán đúng quy trình trước khi ly môn.' }; database_1.default.transaction(() => { database_1.default.prepare('DELETE FROM sect_memberships WHERE user_id=?').run(uid); database_1.default.prepare('INSERT INTO sect_leave_cooldowns(user_id,available_at) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET available_at=excluded.available_at').run(uid, now() + 24 * 3600_000); })(); return { ok: true, message: 'Đã ly môn; cần điều tức đúng 24 giờ trước khi vào hoặc lập môn mới.' }; },
+    depositItem(uid, itemId, quantity, receiptKey) { const m = database_1.default.prepare('SELECT * FROM sect_memberships WHERE user_id=?').get(uid), item = GameCatalog_1.ITEMS[itemId]; if (!m?.sect_id.startsWith('ps:') || !item || !Number.isSafeInteger(quantity) || quantity <= 0 || InventoryRepository_1.inventoryRepository.quantity(uid, itemId) < quantity)
+        return { ok: false, message: 'Không thể nhập kho vật phẩm này.' }; return RuntimeKernelService_1.runtimeKernel.execute(receiptKey, 'PLAYER_SECT', uid, 'WAREHOUSE_DEPOSIT', () => { const before = Number(database_1.default.prepare('SELECT quantity FROM player_sect_warehouse WHERE sect_id=? AND item_id=?').get(m.sect_id, itemId)?.quantity || 0); if (!InventoryRepository_1.inventoryRepository.remove(uid, itemId, quantity))
+        throw new Error('INSUFFICIENT_ITEM'); const after = before + quantity; database_1.default.prepare('INSERT INTO player_sect_warehouse(sect_id,item_id,quantity,updated_at) VALUES(?,?,?,?) ON CONFLICT(sect_id,item_id) DO UPDATE SET quantity=excluded.quantity,updated_at=excluded.updated_at').run(m.sect_id, itemId, after, now()); database_1.default.prepare('INSERT INTO player_sect_ledger(id,sect_id,actor_id,kind,asset_id,amount,before_value,after_value,receipt_key,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run((0, crypto_1.randomUUID)(), m.sect_id, uid, 'DEPOSIT_ITEM', itemId, quantity, before, after, receiptKey, now()); return { ok: true, message: `Đã nhập kho ${item.name} ×${quantity}.` }; }).value; },
+    upgradeBuilding(uid, buildingId, receiptKey) { const m = database_1.default.prepare('SELECT * FROM sect_memberships WHERE user_id=?').get(uid), b = m && database_1.default.prepare('SELECT * FROM player_sect_buildings WHERE sect_id=? AND building_id=?').get(m.sect_id, buildingId); if (!m?.sect_id.startsWith('ps:') || !['tong_chu', 'truong_lao'].includes(m.role_id) || !b)
+        return { ok: false, message: 'Không có quyền nâng công trình.' }; const next = b.level + 1, cost = next * 5000, sect = database_1.default.prepare('SELECT treasury_lt FROM player_sects WHERE id=?').get(m.sect_id); if (next > 10 || sect.treasury_lt < cost)
+        return { ok: false, message: 'Công trình đã tối đa hoặc ngân quỹ không đủ.' }; return RuntimeKernelService_1.runtimeKernel.execute(receiptKey, 'PLAYER_SECT', uid, 'BUILDING_UPGRADE', () => { database_1.default.prepare('UPDATE player_sects SET treasury_lt=treasury_lt-? WHERE id=?').run(cost, m.sect_id); database_1.default.prepare('UPDATE player_sect_buildings SET level=?,updated_at=? WHERE sect_id=? AND building_id=?').run(next, now(), m.sect_id, buildingId); return { ok: true, message: `${buildingId} đã lên cấp ${next}; tiêu hao ${cost} LT.` }; }).value; },
+    ensureDailyMission(uid) { const m = database_1.default.prepare('SELECT * FROM sect_memberships WHERE user_id=?').get(uid); if (!m?.sect_id.startsWith('ps:'))
+        return []; const key = `sect:${m.sect_id}:${day()}`; if (!database_1.default.prepare('SELECT 1 FROM player_sect_missions WHERE id=?').get(key))
+        database_1.default.prepare("INSERT INTO player_sect_missions(id,sect_id,title,objective,target,reward_json,created_at,expires_at) VALUES(?,?,?,'hiep_tac',10,?,?,?)").run(key, m.sect_id, 'Đồng Môn Hiệp Tác', JSON.stringify({ reputation: 80, treasuryLt: 2000 }), now(), now() + 24 * 3600_000); return database_1.default.prepare('SELECT * FROM player_sect_missions WHERE sect_id=? AND status=\'ACTIVE\'').all(m.sect_id); },
+    progressMission(uid, amount = 1) { const m = database_1.default.prepare('SELECT * FROM sect_memberships WHERE user_id=?').get(uid); if (!m?.sect_id.startsWith('ps:'))
+        return; this.ensureDailyMission(uid); database_1.default.prepare("UPDATE player_sect_missions SET progress=MIN(target,progress+?) WHERE sect_id=? AND status='ACTIVE' AND objective='hiep_tac'").run(Math.max(0, amount), m.sect_id); }
+};

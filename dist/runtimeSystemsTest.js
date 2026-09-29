@@ -1,0 +1,115 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const fs_1 = __importDefault(require("fs"));
+const path_1 = __importDefault(require("path"));
+const p = path_1.default.join(process.cwd(), 'data', 'runtime-systems-test.sqlite');
+for (const f of [p, p + '-wal', p + '-shm'])
+    try {
+        fs_1.default.unlinkSync(f);
+    }
+    catch { }
+process.env.DB_PATH = p;
+const { initDatabase } = require('./database/database'), db = require('./database/database').default, { userRepository } = require('./database/repositories/UserRepository'), { inventoryRepository } = require('./database/repositories/InventoryRepository'), { itemInstanceService } = require('./services/ItemInstanceService');
+const { sectRuntime, farmRuntime, companionRuntime, qilingRuntime, intentRuntime, dutyRuntime, partyRuntime, rankingRuntime, eventRuntime, auditRuntimeTables } = require('./services/RuntimeSystemsService');
+const { auditRuntimeCatalog } = require('./config/RuntimeCatalog');
+const { auctionService } = require('./services/AuctionService'), { rankingSeasonService, pvpWindowOpen } = require('./services/RankingSeasonService'), { worldEventGameplay } = require('./services/WorldEventGameplayService'), { craftingService } = require('./services/CraftingService'), { RECIPES } = require('./config/GameCatalog');
+const { appearanceService, DEFAULT_PROFILE_THUMBNAIL } = require('./services/AppearanceService');
+const { ownerControlService } = require('./services/OwnerControlService');
+function ok(x, m) { if (!x)
+    throw new Error(m); }
+initDatabase();
+for (const id of ['a', 'b', 'c'])
+    userRepository.create(id, id);
+db.prepare("UPDATE users SET level=100,coin_ha_pham=100000 WHERE discord_id IN ('a','b','c')").run();
+for (const id of ['a', 'b', 'c'])
+    db.prepare("INSERT INTO player_credentials(user_id,credential_id,state,source_ref,granted_at) VALUES(?,'THAT_MON_BAI_THIEP','ACTIVE','TEST',?)").run(id, Date.now());
+ok(sectRuntime.join('a', 'hoa_chan').ok && !sectRuntime.canLearn('a'), 'outer membership lock');
+ok(sectRuntime.leave('a').ok && !sectRuntime.join('a', 'huyen_nguyen').ok, '24h leave cooldown');
+db.prepare('DELETE FROM sect_leave_cooldowns WHERE user_id=?').run('a');
+ok(sectRuntime.join('a', 'phu_do_cung').ok && sectRuntime.canLearn('a'), 'no-outer sect starts inner');
+inventoryRepository.add('a', 'MAT-HAT-MUA-MUON', 1);
+ok(farmRuntime.plant('a', 1).ok, 'farm plant');
+db.prepare('UPDATE farm_plots SET ready_at=0').run();
+ok(farmRuntime.harvest('a', 1).ok, 'farm harvest');
+ok(companionRuntime.grant('a', 'thanh_moc_ly').ok, 'pet source');
+const pet = companionRuntime.list('a')[0];
+inventoryRepository.add('a', 'beast_0', 5);
+inventoryRepository.add('a', 'beast_1', 2);
+for (let i = 0; i < 5; i++)
+    companionRuntime.feed('a', pet.id);
+ok(companionRuntime.advance('a', pet.id).ok && companionRuntime.equip('a', pet.id).ok, 'pet growth/equip');
+const sword = itemInstanceService.create('a', 'weapon_0', 'weapon', { source: 'TEST' }, { binding: 'UNBOUND' });
+ok(qilingRuntime.seed('a', sword.instance_id, 1).ok, 'linh co');
+ok(!itemInstanceService.escrow('a', sword.instance_id).ok, 'linh co not tradable');
+for (let i = 0; i < 2; i++)
+    qilingRuntime.nurture('a', sword.instance_id);
+ok(qilingRuntime.list('a')[0].stage === 'TRAM_TICH' && itemInstanceService.escrow('a', sword.instance_id).ok, 'tram tich tradable');
+itemInstanceService.restoreEscrow(sword.instance_id);
+for (let i = 0; i < 6; i++)
+    qilingRuntime.nurture('a', sword.instance_id);
+for (let i = 0; i < 14; i++)
+    qilingRuntime.nurture('a', sword.instance_id);
+ok(qilingRuntime.list('a')[0].stage === 'THUC_TINH' && itemInstanceService.get(sword.instance_id).binding === 'SOULBOUND', 'qiling awakening lock');
+ok(intentRuntime.practice('a', 'Y_CANH', 'kiem_y').ok, 'intent progress');
+const duties = dutyRuntime.today('a');
+ok(duties.length === 6 && new Set(duties.map((x) => x.duty_type)).size === 6, 'six daily cards from eight types');
+db.prepare('UPDATE duty_assignments SET progress=target WHERE id=?').run(duties[0].id);
+ok(dutyRuntime.claim('a', duties[0].id).ok, 'duty settlement');
+const party = partyRuntime.create('a', 'realm_1');
+ok(party.ok && partyRuntime.join('b', party.id).ok, 'party create/join');
+ok(!partyRuntime.changeRealm('a', 'realm_4').ok, 'realm eligibility block');
+partyRuntime.ready('b');
+ok(partyRuntime.start('a').ok, 'party ready/start');
+inventoryRepository.add('a', 'pill_0', 2);
+db.prepare("UPDATE users SET hp=1 WHERE discord_id IN ('a','b')").run();
+ok(partyRuntime.heal('a').ok && userRepository.get('b').hp === userRepository.get('b').max_hp, 'per-target party heal');
+const monday20 = new Date('2026-09-28T13:00:00Z').getTime();
+ok(eventRuntime.tick(monday20).includes('Đại Yêu Hoành Thế'), 'Vietnam scheduler');
+eventRuntime.tick(monday20);
+ok(db.prepare("SELECT COUNT(*) n FROM world_event_runs WHERE event_type='DAI_YEU'").get().n === 1, 'event idempotency');
+db.prepare("UPDATE users SET pvp_rating=2000 WHERE discord_id='a'").run();
+ok(rankingRuntime.board('QUAN_HUNG')[0].user_id === 'a', 'ranking query');
+ok(!auditRuntimeCatalog().length && !auditRuntimeTables().length, 'runtime audit');
+const run = db.prepare("SELECT id FROM world_event_runs WHERE event_type='DAI_YEU'").get();
+db.prepare("UPDATE world_event_runs SET starts_at=0,ends_at=?,status='ACTIVE' WHERE id=?").run(Date.now() + 3600000, run.id);
+ok(worldEventGameplay.attack('a').ok, 'world boss attack');
+ok(!worldEventGameplay.attack('a').ok, 'world boss 30s cooldown');
+db.prepare("UPDATE users SET hp=1 WHERE discord_id='a'").run();
+ok(worldEventGameplay.healNpc('a').ok && userRepository.get('a').hp === userRepository.get('a').max_hp, 'npc healing LT sink');
+ok(worldEventGameplay.settle(run.id) >= 1, 'event settlement');
+const rewardCount = db.prepare('SELECT COUNT(*) n FROM world_event_rewards WHERE run_id=?').get(run.id).n;
+worldEventGameplay.settle(run.id);
+ok(db.prepare('SELECT COUNT(*) n FROM world_event_rewards WHERE run_id=?').get(run.id).n === rewardCount, 'event reward idempotency');
+rankingSeasonService.recordPvp('a', 'b', monday20);
+ok(rankingSeasonService.board('QUAN_HUNG', monday20)[0].user_id === 'a', 'weekly ranking score');
+const key = rankingSeasonService.keys(monday20).week;
+rankingSeasonService.settle('QUAN_HUNG', key);
+const before = userRepository.get('a').knb;
+rankingSeasonService.settle('QUAN_HUNG', key);
+ok(userRepository.get('a').knb === before, 'ranking settlement idempotency');
+ok(pvpWindowOpen(new Date('2026-09-28T09:00:00Z').getTime()) && !pvpWindowOpen(new Date('2026-09-28T08:59:00Z').getTime()), 'Vietnam PvP window');
+ok(rankingSeasonService.keys(new Date('2027-01-01T12:00:00Z').getTime()).week === '2026-W53', 'ISO week boundary');
+const sale = itemInstanceService.create('b', 'weapon_0', 'weapon', { source: 'TEST' }, { binding: 'UNBOUND' }), au = auctionService.create('b', sale.instance_id, 100, 1);
+ok(au.ok && auctionService.bid('c', au.id, 150).ok, 'auction bid escrow');
+db.prepare('UPDATE auction_listings SET ends_at=0 WHERE id=?').run(au.id);
+auctionService.settle();
+ok(itemInstanceService.get(sale.instance_id).owner_id === 'c', 'auction ownership transfer');
+const recipe = RECIPES.find((x) => x.id === 'alchemy_0');
+for (const [x, q] of recipe.ingredients)
+    inventoryRepository.add('c', x, q * 5);
+db.prepare("UPDATE users SET coin_ha_pham=100000 WHERE discord_id='c'").run();
+ok(craftingService.craftMany('c', 'alchemy_0', 5).ok && craftingService.mastery('c', 'alchemy').exp === 5, 'batch craft and profession exp');
+ok(!appearanceService.update('a', 'avatar_url', 'javascript:alert(1)').ok, 'appearance rejects unsafe URL');
+ok(appearanceService.update('a', 'avatar_url', 'https://example.com/avatar.png').ok, 'appearance update');
+ok(appearanceService.resetThumbnail('a').ok && userRepository.get('a').thumbnail_url === DEFAULT_PROFILE_THUMBNAIL, 'default thumbnail');
+ok(db.prepare("SELECT COUNT(*) n FROM appearance_preferences WHERE user_id='a'").get().n === 2, 'appearance receipts');
+ok(ownerControlService.bindTest('owner', 'c').ok && userRepository.get('c').title === 'TEST_ACCOUNT', 'single test account binding');
+rankingSeasonService.recordPvp('c', 'b', Date.now());
+ok(!rankingSeasonService.board('QUAN_HUNG').some((x) => x.user_id === 'c'), 'test account excluded from ranking query');
+db.prepare("UPDATE world_event_runs SET status='ACTIVE',ends_at=? WHERE id=?").run(Date.now() + 3600000, run.id);
+ok(!worldEventGameplay.attack('c').ok, 'test account blocked at World Event write');
+ok(ownerControlService.announce('owner', 'tuha', 'Thử nghiệm cáo thị').ok, 'pavilion announcement receipt');
+console.log('✅ Runtime systems executable PASS');

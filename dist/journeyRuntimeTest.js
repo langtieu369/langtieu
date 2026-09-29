@@ -1,0 +1,118 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const fs_1 = __importDefault(require("fs"));
+const path_1 = __importDefault(require("path"));
+const dbPath = path_1.default.join(process.cwd(), 'data', 'journey-test.sqlite');
+fs_1.default.mkdirSync(path_1.default.dirname(dbPath), { recursive: true });
+for (const f of [dbPath, dbPath + '-wal', dbPath + '-shm'])
+    try {
+        fs_1.default.unlinkSync(f);
+    }
+    catch { }
+process.env.DB_PATH = dbPath;
+const { initDatabase } = require('./database/database');
+const db = require('./database/database').default;
+const { userRepository } = require('./database/repositories/UserRepository');
+const { dialogueService } = require('./services/DialogueService');
+const { journeyService } = require('./services/JourneyService');
+const { MOON_NAME_JOURNEY_ID, auditJourneyCatalog } = require('./config/JourneyCatalog');
+const { JOURNEY_REGISTRY, JOURNEY_EDGES, auditJourneyRegistry } = require('./config/JourneyRegistry');
+const { PRODUCTION_JOURNEYS, auditProductionJourneys } = require('./config/JourneyProductionCatalog');
+function ok(v, m) { if (!v)
+    throw new Error(m); }
+initDatabase();
+dialogueService.seedPresence();
+userRepository.create('journey-user', 'Người Thử');
+ok(auditJourneyCatalog().length === 0, 'journey catalog lint');
+ok(auditJourneyRegistry().length === 0, '169 registry lint');
+ok(auditProductionJourneys().length === 0, '169 definition lint');
+ok(JOURNEY_REGISTRY.length === 169 && PRODUCTION_JOURNEYS.length === 169, '169 canonical definitions');
+ok(new Set(JOURNEY_REGISTRY.map((x) => x.id)).size === 169, 'unique registry ids');
+ok(new Set(JOURNEY_REGISTRY.map((x) => x.title)).size === 169, 'unique canonical titles');
+ok(db.prepare('SELECT COUNT(*) n FROM journey_catalog').get().n === 169, '169 database rows');
+ok(db.prepare('SELECT COUNT(*) n FROM journey_edges').get().n === JOURNEY_EDGES.length, 'graph edges materialized');
+ok(db.prepare(`SELECT COUNT(*) n FROM journey_catalog WHERE materialization='PLAYABLE'`).get().n === 169, 'playable coverage complete');
+ok(!journeyService.start('journey-user', MOON_NAME_JOURNEY_ID).ok, 'eligibility gate');
+dialogueService.setStage('journey-user', 'lang_tieu', 'familiar');
+for (let i = 1; i <= 3; i++)
+    dialogueService.remember('journey-user', 'lang_tieu', `shared_${i}`, { summary: `memory ${i}` });
+let v = journeyService.start('journey-user', MOON_NAME_JOURNEY_ID);
+ok(v.ok && v.state.current_node === 'MOON_CHOICE', 'start');
+ok(!v.actions.some((x) => x.id === 'CANH_HUYEN'), 'knowledge-gated choice hidden');
+ok(journeyService.pause('journey-user', MOON_NAME_JOURNEY_ID).ok, 'pause');
+v = journeyService.resume('journey-user', MOON_NAME_JOURNEY_ID);
+ok(v.ok && v.state.status === 'WAITING_INPUT', 'resume');
+journeyService.grantKnowledge('journey-user', 'lang_tieu_name_canh_huyen', 'HEARD', 'npc:old_acquaintance', 'linked');
+v = journeyService.view('journey-user', MOON_NAME_JOURNEY_ID);
+ok(v.actions.some((x) => x.id === 'CANH_HUYEN'), 'knowledge choice revealed');
+v = journeyService.choose('journey-user', MOON_NAME_JOURNEY_ID, 'CANH_HUYEN');
+ok(v.ok && v.state.current_node === 'CANH_HUYEN_SOURCE', 'branch');
+v = journeyService.choose('journey-user', MOON_NAME_JOURNEY_ID, 'TELL_SOURCE');
+ok(v.ok && v.state.current_node === 'CANH_HUYEN_END', 'provenance response');
+let end = journeyService.choose('journey-user', MOON_NAME_JOURNEY_ID, 'CLOSE_MOON');
+ok(end.ok && end.message.includes('Vân Du Lục'), 'resolve');
+ok(db.prepare('SELECT COUNT(*) n FROM journey_receipts WHERE user_id=?').get('journey-user').n === 1, 'single receipt');
+ok(db.prepare('SELECT COUNT(*) n FROM travel_log_entries WHERE user_id=?').get('journey-user').n === 1, 'travel log');
+ok(!journeyService.choose('journey-user', MOON_NAME_JOURNEY_ID, 'CLOSE_MOON').ok, 'double-click rejected');
+ok(db.prepare('SELECT COUNT(*) n FROM journey_receipts WHERE user_id=?').get('journey-user').n === 1, 'receipt idempotency');
+v = journeyService.start('journey-user', MOON_NAME_JOURNEY_ID);
+ok(v.ok && v.message.includes('không reset'), 'one-time replay policy');
+journeyService.grantKnowledge('journey-user', 'co_nhan_da_minh', 'CONFIRMED', 'journey:co_nhan_da_minh', 'confirmed');
+v = journeyService.revisit('journey-user', MOON_NAME_JOURNEY_ID);
+ok(v.message.includes('“Ừ.”'), 'late callback');
+const state = db.prepare('SELECT state_json FROM journey_states WHERE user_id=? AND journey_id=?').get('journey-user', MOON_NAME_JOURNEY_ID);
+const flags = JSON.parse(state.state_json);
+ok(flags.first_name_choice === 'canh_huyen' && flags.name_provenance[0].source_ref === 'npc:old_acquaintance', 'choice and provenance persisted');
+db.prepare('UPDATE journey_states SET definition_version=0 WHERE user_id=? AND journey_id=?').run('journey-user', MOON_NAME_JOURNEY_ID);
+ok(!journeyService.migrate('journey-user', MOON_NAME_JOURNEY_ID).ok, 'unsafe migration quarantined');
+ok(db.prepare('SELECT status FROM journey_states WHERE user_id=?').get('journey-user').status === 'PAUSED', 'migration preserves state');
+function prepare(uid) { userRepository.create(uid, uid); dialogueService.setStage(uid, 'lang_tieu', 'familiar'); for (let i = 1; i <= 3; i++)
+    dialogueService.remember(uid, 'lang_tieu', `shared_${i}`, { summary: `memory ${i}` }); }
+prepare('silent-user');
+v = journeyService.start('silent-user', MOON_NAME_JOURNEY_ID);
+ok(!journeyService.choose('silent-user', MOON_NAME_JOURNEY_ID, 'CANH_HUYEN').ok, 'forged hidden action rejected');
+ok(db.prepare('SELECT COUNT(*) n FROM journey_history WHERE user_id=?').get('silent-user').n === 1, 'invalid action no history');
+journeyService.choose('silent-user', MOON_NAME_JOURNEY_ID, 'SILENCE');
+end = journeyService.choose('silent-user', MOON_NAME_JOURNEY_ID, 'KEEP_SILENCE');
+ok(end.ok, 'silence is complete outcome');
+ok(db.prepare('SELECT body FROM travel_log_entries WHERE user_id=?').get('silent-user').body.includes('không ai nói gì'), 'silence log');
+prepare('lang-user');
+journeyService.start('lang-user', MOON_NAME_JOURNEY_ID);
+journeyService.choose('lang-user', MOON_NAME_JOURNEY_ID, 'LANG_TIEU');
+end = journeyService.choose('lang-user', MOON_NAME_JOURNEY_ID, 'ACK_LANG_TIEU');
+ok(end.ok, 'Lang Tieu branch complete');
+ok(db.prepare('SELECT body FROM travel_log_entries WHERE user_id=?').get('lang-user').body.includes('Lăng Tiêu'), 'Lang Tieu log');
+const tables = ['journey_states', 'journey_history', 'journey_receipts', 'knowledge_provenance', 'travel_log_entries'];
+for (const t of tables)
+    ok(!!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(t), `schema ${t}`);
+ok(db.prepare('SELECT COUNT(*) n FROM journey_states WHERE user_id=?').get('lang-user').n === 1, 'restart-safe persisted state');
+ok(db.prepare('SELECT COUNT(*) n FROM journey_receipts WHERE user_id=?').get('lang-user').n === 1, 'branch receipt');
+let executed = 0;
+for (const d of PRODUCTION_JOURNEYS.filter((x) => x.id !== MOON_NAME_JOURNEY_ID)) {
+    const uid = `all-${d.id}`;
+    userRepository.create(uid, uid);
+    for (const p of JOURNEY_EDGES.filter((e) => e.to === d.id)) {
+        db.prepare(`INSERT OR IGNORE INTO journey_states(user_id,journey_id,definition_version,status,current_node,state_json,lock_version,started_at,updated_at,resolved_at) VALUES(?,?,1,'RESOLVED','TEST','{}',0,?,?,?)`).run(uid, p.from, Date.now(), Date.now(), Date.now());
+    }
+    let x = journeyService.start(uid, d.id);
+    ok(x.ok && x.state.current_node === 'ENTRY', `start ${d.id}`);
+    for (const action of ['OBSERVE', 'ACT', 'CONFIRM', 'COMMIT']) {
+        x = journeyService.choose(uid, d.id, action);
+        ok(x.ok, `${d.id}:${action}`);
+    }
+    ok(db.prepare('SELECT status FROM journey_states WHERE user_id=? AND journey_id=?').get(uid, d.id).status === 'RESOLVED', `resolved ${d.id}`);
+    ok(db.prepare('SELECT COUNT(*) n FROM journey_receipts WHERE user_id=? AND journey_id=?').get(uid, d.id).n === 1, `receipt ${d.id}`);
+    executed++;
+}
+ok(executed === 168, 'all registered definitions executed');
+const directRewards = { 'CD-WARM-01': { 'MAT-HAT-MUA-MUON': 1 }, 'CD-JOY-01': { 'MAT-MANH-DEN-HOI': 1 }, 'CD-RESTORE-01': { 'SEED-XICH-DIEP': 3, 'MAT-NHAM-TAM-THAO': 2 }, 'CD-COMMUNITY-01': { 'TOOL-DEN-TAM-DUNG': 1, 'MAT-THANH-TI': 3 }, 'CD-SOCIAL-01': { 'PILL-HOI-KHI': 1 } };
+for (const [jid, rewards] of Object.entries(directRewards))
+    for (const [item, qty] of Object.entries(rewards))
+        ok(db.prepare('SELECT quantity FROM inventories WHERE user_id=? AND item_id=?').get(`all-${jid}`, item)?.quantity === qty, `reward settlement ${jid}:${item}`);
+for (const jid of ['ART01', 'ART02', 'ART03', 'ART04', 'ART05', 'ART06', 'CD-LIFE-01', 'CD-LETTER-01', 'CD-CHILD-01'])
+    ok(db.prepare("SELECT COUNT(*) n FROM knowledge_provenance WHERE user_id=? AND fact_key LIKE 'journey_reward:%'").get(`all-${jid}`).n === 1, `non-inventory custody ${jid}`);
+ok(journeyService.available('all-CD-WARM-01').every((d) => d.id !== 'CD-WARM-01'), 'resolved journey excluded from available list');
+console.log(`✅ Cơ Duyên runtime: 169/169 PLAYABLE · ${executed}/168 promoted definitions executed · ${JOURNEY_EDGES.length} graph edges · 3/3 Gọi Tên Dưới Trăng branches operational`);

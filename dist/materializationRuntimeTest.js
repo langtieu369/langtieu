@@ -1,0 +1,134 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const fs_1 = __importDefault(require("fs"));
+const path_1 = __importDefault(require("path"));
+const dbPath = path_1.default.join(process.cwd(), 'data', 'materialization-test.sqlite');
+for (const f of [dbPath, dbPath + '-wal', dbPath + '-shm'])
+    try {
+        fs_1.default.unlinkSync(f);
+    }
+    catch { }
+process.env.DB_PATH = dbPath;
+const { initDatabase } = require('./database/database'), db = require('./database/database').default;
+const { userRepository } = require('./database/repositories/UserRepository'), { inventoryRepository } = require('./database/repositories/InventoryRepository');
+const { runtimeKernel, contentResolver } = require('./services/RuntimeKernelService');
+const { combatEngine } = require('./services/CombatEngineService');
+const { dungeonPartyService } = require('./services/DungeonPartyService');
+const { playerSectService } = require('./services/PlayerSectService');
+const { relationshipRuntime, mentorshipRuntime, npcCompanionRuntime } = require('./services/RelationshipRuntimeService');
+const { rareDutyRuntime, anomalyRuntime } = require('./services/ActivityRuntimeService');
+const { realmNpcVisitService } = require('./services/RealmNpcVisitService');
+const { sectRuntime } = require('./services/RuntimeSystemsService');
+const { auditCombatCatalog } = require('./config/CombatCatalog'), { auditActivityCatalog } = require('./config/ActivityCatalog');
+function ok(v, m) { if (!v)
+    throw new Error(m); }
+initDatabase();
+for (const id of ['a', 'b', 'c', 'd'])
+    userRepository.create(id, id.toUpperCase());
+db.prepare("UPDATE users SET level=35,max_hp=2000,hp=2000,max_mp=200,mp=200,atk=180,def=100,speed=120,stamina=500,coin_ha_pham=100000 WHERE discord_id IN ('a','b','c','d')").run();
+let applied = 0;
+const one = runtimeKernel.execute('idem:1', 'TEST', 'a', 'ADD', () => ({ value: ++applied })), two = runtimeKernel.execute('idem:1', 'TEST', 'a', 'ADD', () => ({ value: ++applied }));
+ok(one.value.value === 1 && two.replayed && two.value.value === 1 && applied === 1, 'idempotent transaction receipt');
+try {
+    runtimeKernel.execute('rollback:1', 'TEST', 'a', 'FAIL', () => { db.prepare("UPDATE users SET coin_ha_pham=0 WHERE discord_id='a'").run(); throw new Error('boom'); });
+}
+catch { }
+ok(userRepository.get('a').coin_ha_pham === 100000 && !db.prepare("SELECT 1 FROM operation_receipts WHERE receipt_key='rollback:1'").get(), 'atomic rollback');
+ok(runtimeKernel.emit('TEST', 'outbox:1', { a: 1 }).created && !runtimeKernel.emit('TEST', 'outbox:1', { a: 2 }).created, 'outbox dedupe');
+db.prepare("INSERT INTO content_definitions(definition_id,kind,version,status,data_json,created_by,created_at,published_at) VALUES('enemy_test','monster',1,'PUBLISHED',?,'test',?,?)").run(JSON.stringify({ name: 'Địch Thử', hp: 100, references: ['pill_0'] }), Date.now(), Date.now());
+ok(contentResolver.resolve('enemy_test', 'monster')?.version === 1, 'published content resolver');
+contentResolver.pin('run:pin', 'enemy_test');
+db.prepare("INSERT INTO content_definitions(definition_id,kind,version,status,data_json,created_by,created_at,published_at) VALUES('enemy_test','monster',2,'PUBLISHED',?,'test',?,?)").run(JSON.stringify({ name: 'Địch Thử V2', hp: 200 }), Date.now(), Date.now());
+ok(contentResolver.pinned('run:pin', 'enemy_test')?.version === 1, 'content version pin');
+ok(!contentResolver.audit().length, 'content reference audit');
+const f1 = combatEngine.start({ mode: 'PVE', sourceId: 'test', sourceRunId: 'one', players: ['a'], enemies: [{ id: 'e', name: 'Địch', hp: 900, atk: 80, def: 35 }], seed: 'fixed' });
+ok(f1.state === 'VICTORY' || f1.state === 'DEFEAT', 'combat terminal');
+const ledger1 = JSON.stringify(combatEngine.replay(f1.encounterId, 'DETAIL').events.map((x) => [x.cycle, x.actor_id, x.target_id, x.action_id, x.delta_json, x.input_hash, x.output_hash]));
+ok(combatEngine.settle(f1.encounterId, 'settle:one').ok, 'combat settle');
+const f2 = combatEngine.start({ mode: 'PVE', sourceId: 'test', sourceRunId: 'two', players: ['a'], enemies: [{ id: 'e', name: 'Địch', hp: 900, atk: 80, def: 35 }], seed: 'fixed' });
+const ledger2 = JSON.stringify(combatEngine.replay(f2.encounterId, 'DETAIL').events.map((x) => [x.cycle, x.actor_id, x.target_id, x.action_id, x.delta_json, x.input_hash, x.output_hash]));
+ok(ledger1 === ledger2, 'deterministic ledger');
+combatEngine.settle(f2.encounterId, 'settle:two');
+ok(combatEngine.settle(f2.encounterId, 'settle:two').replayed, 'double settlement idempotent');
+ok(!combatEngine.audit(f1.encounterId).length, 'combat ledger audit');
+const party = dungeonPartyService.create('a', 'realm_1');
+ok(party.ok && dungeonPartyService.invite('a', 'b').ok && dungeonPartyService.accept('b', party.id).ok, 'party invite accept');
+ok(!dungeonPartyService.transfer('b', 'a').ok, 'leader authority');
+dungeonPartyService.ready('b');
+const run = dungeonPartyService.start('a');
+ok(run.ok && !dungeonPartyService.chooseRoute('b', 'TRUC_TIEN').ok, 'roster lock and leader route');
+for (let room = 0; room < 3; room++) {
+    const fight = dungeonPartyService.chooseRoute('a', 'THAN_TRONG');
+    ok(fight.ok, 'dungeon room combat');
+    const settle = dungeonPartyService.settleRoom('a');
+    ok(settle.ok, 'dungeon room settle');
+    if (!settle.won)
+        break;
+}
+const sect = playerSectService.create('c', 'Thanh Hà Môn', 'sect:create:c');
+ok(sect.ok && playerSectService.create('c', 'Khác', 'sect:create:c').id === sect.id, 'player sect create idempotent');
+inventoryRepository.add('c', 'thanh_linh_thao', 3);
+ok(playerSectService.depositItem('c', 'thanh_linh_thao', 2, 'sect:deposit:1').ok, 'sect warehouse receipt');
+db.prepare('UPDATE player_sects SET treasury_lt=50000 WHERE id=?').run(sect.id);
+ok(playerSectService.upgradeBuilding('c', 'duoc_vien', 'sect:build:1').ok, 'sect building progression');
+ok(playerSectService.ensureDailyMission('c').length === 1, 'sect daily mission');
+relationshipRuntime.recordShared('c', 'd', 'KHAM_PHA', 'shared:1', 'shared:receipt:1');
+const invite = relationshipRuntime.proposePartner('c', 'd');
+ok(invite.ok && relationshipRuntime.acceptPartner('d', invite.id).ok, 'partner invite two-stage');
+relationshipRuntime.confirmPartner('c', invite.id);
+ok(relationshipRuntime.confirmPartner('d', invite.id).ok && relationshipRuntime.bond('c').stage === 'DONG_DAO', 'partner final bilateral confirm');
+const dual = relationshipRuntime.proposeDual('c', 30);
+relationshipRuntime.confirmDual('c', dual.id);
+const dualDone = relationshipRuntime.confirmDual('d', dual.id);
+ok(dualDone.ok && dualDone.rewardA > 0 && dualDone.rewardB > 0, 'dual cultivation atomic settlement');
+ok(relationshipRuntime.dissolve('c').ok && !relationshipRuntime.proposePartner('c', 'd').ok, 'partner archive and 24h cooldown');
+const mi = mentorshipRuntime.propose('a', 'c');
+mentorshipRuntime.confirm('a', mi.id);
+const mc = mentorshipRuntime.confirm('c', mi.id);
+ok(mc.ok, 'mentor bilateral consent');
+ok(mentorshipRuntime.guide('a', mc.bondId, 'COMBAT', 'combat:failed:1', 'giu_khi').ok, 'guidance receipt');
+ok(!mentorshipRuntime.lesson('a', mc.bondId, 'kiem_phap', 2, 'PLAYER_TEACHABLE', 'act:1').ok, 'lesson order protected');
+ok(mentorshipRuntime.lesson('a', mc.bondId, 'kiem_phap', 1, 'PLAYER_TEACHABLE', 'act:1').ok, 'teachable lesson');
+db.prepare("INSERT INTO player_npc_knowledge(user_id,npc_id,stage,first_met_at,last_met_at) VALUES('d','lang_tieu','eligible',?,?)").run(Date.now(), Date.now());
+db.prepare("INSERT OR REPLACE INTO npc_presence(npc_id,location_id,state,version,updated_at) VALUES('lang_tieu','hoa_chan','available',1,?)").run(Date.now());
+const ni = npcCompanionRuntime.invite('d', 'lang_tieu', 'activity:1');
+ok(ni.ok && !npcCompanionRuntime.invite('d', 'lang_tieu', 'activity:2').ok, 'one active persistent NPC');
+ok(npcCompanionRuntime.settle('d', 'lang_tieu', 'activity:1', 'Cùng vượt một trận nhỏ.').ok, 'npc memory cooldown settlement');
+db.prepare("INSERT INTO knowledge_provenance(user_id,fact_key,source_kind,source_ref,confidence,learned_at) VALUES('d','f1','OBSERVED','x','confirmed',?),('d','f2','OBSERVED','y','supported',?)").run(Date.now(), Date.now());
+db.prepare("INSERT INTO duty_assignments(id,user_id,day_key,duty_type,title,target,progress,status,reward_lt,reward_tuvi,created_at) VALUES('inv','d','2026-01-01','dieu_tra','Điều tra',1,1,'CLAIMED',0,0,?)").run(Date.now());
+ok(rareDutyRuntime.discover('d').some((x) => x.id === 'vo_danh_cuu_an'), 'rare duty concrete trigger');
+for (const [g, s] of [['ho_so', 'archive:1'], ['nhan_chung', 'npc:ha_thuong_ngon'], ['dia_diem', 'location:old'], ['doi_chieu', 'tu_ha:1']])
+    ok(rareDutyRuntime.addEvidence('d', 'vo_danh_cuu_an', g, s, `evidence:${g}`).ok, 'evidence source');
+ok(rareDutyRuntime.resolve('d', 'vo_danh_cuu_an', 'rare:resolve:1').ok, '4/6 evidence resolution');
+const thu = new Date('2026-10-01T12:30:00Z').getTime();
+ok(anomalyRuntime.tick(thu).length === 1 && anomalyRuntime.tick(thu).length === 0, 'autonomous anomaly schedule idempotent');
+const ar = db.prepare('SELECT id FROM anomaly_runs').get();
+anomalyRuntime.act('d', ar.id);
+anomalyRuntime.act('d', ar.id);
+const ac = anomalyRuntime.act('d', ar.id);
+ok(ac.ok && db.prepare('SELECT COUNT(*) n FROM world_merit_ledger WHERE user_id=\'d\'').get().n === 1, 'anomaly settlement and world merit');
+ok(!auditCombatCatalog().length && !auditActivityCatalog().length, 'new catalogs audit');
+const bai = realmNpcVisitService.enterDongPhu('d');
+ok(bai?.visit_id === 'CD.ONBOARDING.THAT_MON_BAI_THIEP.V1', 'Sơ Nhập opens Thất Môn Bái Thiếp on first Động Phủ return');
+ok(!sectRuntime.join('d', 'hoa_chan').ok, 'sect admission blocked before Bái Thiếp');
+const baiView = realmNpcVisitService.view('d', bai.visit_id);
+ok(baiView?.actions.length === 4, 'Bái Thiếp authored choices');
+ok(realmNpcVisitService.choose('d', bai.visit_id, 'KEEP_FOR_LATER').ok && realmNpcVisitService.close('d', bai.visit_id).ok, 'Bái Thiếp resolved');
+ok(!!db.prepare("SELECT 1 FROM player_credentials WHERE user_id='d' AND credential_id='THAT_MON_BAI_THIEP' AND state='ACTIVE'").get(), 'Bái Thiếp persisted as system credential');
+ok(!!db.prepare("SELECT 1 FROM travel_log_entries WHERE user_id='d' AND entry_key='realm_visit:CD.ONBOARDING.THAT_MON_BAI_THIEP.V1'").get(), 'Bái Thiếp Vân Du Lục');
+for (const [rank, visitId] of [[6, 'LT-REALM-HOP-THE-01'], [8, 'LT-REALM-DO-KIEP-01']]) {
+    ok(realmNpcVisitService.onRealmReached('d', rank) === visitId, `realm visit ${rank} trigger`);
+    ok(realmNpcVisitService.enterDongPhu('d') === null, `realm visit ${rank} does not interrupt breakthrough render`);
+    const pending = realmNpcVisitService.enterDongPhu('d');
+    ok(pending?.visit_id === visitId, `realm visit ${rank} appears on next return`);
+    const view = realmNpcVisitService.view('d', visitId);
+    ok(view?.actions.length === 3, `realm visit ${rank} authored choices`);
+    ok(realmNpcVisitService.choose('d', visitId, view.actions[0].id).ok, `realm visit ${rank} choice`);
+    ok(realmNpcVisitService.close('d', visitId).ok, `realm visit ${rank} resolve`);
+    ok(db.prepare('SELECT 1 FROM travel_log_entries WHERE user_id=? AND entry_key=?').get('d', `realm_visit:${visitId}`), `realm visit ${rank} Vân Du Lục`);
+}
+ok(!realmNpcVisitService.audit().length, 'realm visit catalog audit');
+console.log('✅ Materialization runtime: kernel/combat/dungeon/player-sect/relationships/activities/Lăng Tiêu realm visits PASS');

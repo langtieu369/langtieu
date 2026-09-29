@@ -1,0 +1,61 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.productionJourneyById = exports.PRODUCTION_JOURNEYS = void 0;
+exports.auditProductionJourneys = auditProductionJourneys;
+const JourneyCatalog_1 = require("./JourneyCatalog");
+const JourneyRegistry_1 = require("./JourneyRegistry");
+const familyVoice = {
+    ARTIFACT: { tone: ['kỳ dị', 'trang nghiêm'], opening: 'Một dấu tích có chuỗi lưu truyền rõ ràng xuất hiện; trước khi chạm tới vật, cần xác minh ai đã giữ nó và vì sao nó còn ở đây.', act: 'Đối chiếu dấu niêm, hỏi người biết chuyện và ghi lại phần mình thực sự chứng kiến.', close: 'Nguồn gốc được ghi vào Cổ Vật Lục; vật thể chỉ đổi custody theo lựa chọn hợp lệ.' },
+    TO_GIA_LANG_TIEU: { tone: ['lặng', 'suy tư'], opening: 'Một mảnh ký ức trong mạng Tô gia–Xích Dực–Nhất Phẩm hiện ra, nhưng chưa đủ để kết luận thay cho người trong chuyện.', act: 'Xác định nguồn, so với điều đã biết và chỉ hỏi Lăng Tiêu khi hai người thực sự gặp nhau.', close: 'Mảnh tri thức được nhập theo provenance; Lăng Tiêu không bị đồng nhất với quá khứ.' },
+    HOA_CHAN: { tone: ['ấm', 'lặng'], opening: 'Một chuyện nhỏ trong Hoa Chân để lộ cách người trong môn quan tâm, dạy dỗ và giữ khoảng cách với nhau.', act: 'Ở lại quan sát, cùng làm phần việc trước mắt hoặc hỏi đúng người đã chứng kiến.', close: 'Một shared memory được giữ lại; không biến sinh hoạt đồng môn thành lời răn sáo rỗng.' },
+    XICH_DUC: { tone: ['hào sảng', 'đời thường'], opening: 'Ngoài chiến báo còn có một việc chưa được ghi hết: cách con người lựa chọn trước và sau giao đấu.', act: 'Xem lại diễn biến, nghe người tham dự và phân biệt chiến tích với phần việc ít ai nhắc.', close: 'Chiến báo được bổ sung provenance cùng ký ức nhân vật, không đổi thành rương ngẫu nhiên.' },
+    DIEM_LINH: { tone: ['ấm', 'linh hoạt'], opening: 'Dược tính, sinh linh và lời người trong Cốc không hoàn toàn trùng nhau; việc trước mắt cần được nhìn kỹ thay vì vội kết luận.', act: 'Kiểm tra dấu hiệu, hỏi cách chăm sóc và chọn phương án không làm tổn hại hệ sinh trưởng.', close: 'Dược/ecology knowledge cùng quan hệ được cập nhật; không phát đan hiếm vô nguồn.' },
+    VAN_LINH: { tone: ['tĩnh', 'đời thường'], opening: 'Một sinh hoạt trong núi mở ra câu hỏi về tu hành, giới hạn và cách đối đãi với sinh linh.', act: 'Theo hết công khóa, lắng nghe người phụ trách và tự thử một bước vừa sức.', close: 'Sở đắc được ghi thành trải nghiệm; không ép player nhận truyền thừa không tương hợp.' },
+    LAC_TIEN_UYEN: { tone: ['kỳ dị', 'trang nghiêm'], opening: 'Ngoài ranh giới Lạc Tiên Uyên có một dấu hiệu đủ để quan sát nhưng chưa cho phép suy diễn điều nằm sâu bên trong.', act: 'Giữ đúng giới tuyến, đối chiếu bia/trận và hỏi người canh giữ về phần họ được phép nói.', close: 'Knowledge dừng đúng provenance; không mở vùng cấm hoặc nối sai sang Bất Vu Sơn.' },
+    BAT_VU: { tone: ['vững', 'thẳng'], opening: 'Một bài học ở Bất Vu bắt đầu từ thế đứng, nhịp phách hoặc đường trở về chứ không chỉ từ thắng thua.', act: 'Thử lại động tác, nhìn phản lực và hỏi người hướng dẫn về chỗ thân thể đang tự chống lại mình.', close: 'Training memory được ghi; không biến lời thẳng thành lạnh lùng hay thô bạo.' },
+    HUYEN_NGUYEN: { tone: ['sinh dưỡng', 'suy tư'], opening: 'Một vị trí trận đang ảnh hưởng tới sinh linh quanh nó; thêm linh khí chưa chắc là cách sửa đúng.', act: 'Đo trận vị, kiểm mạch đất và phối hợp để trận nuôi dưỡng thay vì tranh lực.', close: 'Group memory và trận knowledge được cập nhật theo người thật sự tham gia.' },
+    MA_KIEM: { tone: ['kiếm lý', 'đời thường'], opening: 'Một đường kiếm hoặc chuyện trên đảo đặt ra khác biệt giữa danh, ý và người cầm kiếm.', act: 'Giao kiếm, xem lại thế công thủ và nghe cách mỗi người giải thích phần mình không đồng ý.', close: 'Kiếm lý được ghi như một góc nhìn; không bắt đủ bốn kiếm và không xóa nhánh đời thường.' },
+    PHU_DO: { tone: ['gia đình', 'trang nghiêm'], opening: 'Một quyết định trong Hứa Gia cần nói rõ hệ quả trước khi bất kỳ danh phận hay gia danh nào được ghi.', act: 'Xem điều kiện, hỏi quyền và nghĩa vụ, rồi xác nhận hoặc để lại suy nghĩ sau.', close: 'State chỉ commit sau xác nhận rõ; lỗi giữa chừng phải rollback, Ly Môn không tự xóa quan hệ.' },
+    TONG_MON_TRUYEN_DUYEN: { tone: ['truyền thừa', 'trang nghiêm'], opening: 'Một con đường học hỏi hiện ra nhưng chưa đồng nghĩa công pháp đã thuộc về người gặp nó.', act: 'Quan sát, thử hiểu và kiểm tra căn cơ hoặc quyền học trước khi xin chỉ điểm.', close: 'Chỉ avenue/knowledge hợp lệ được mở; truyền thừa đã biết dùng alternate receipt.' },
+    QILING_THANH_MINH: { tone: ['kỳ dị', 'cộng hưởng'], opening: 'Dao động rất nhẹ xuất hiện quanh Vật Mang; ở giai đoạn này không được nhân hóa nó thành Khí Linh đã thức tỉnh.', act: 'Lắng nghe, thử một interaction hợp lệ khác loại và ghi source event để chống spam.', close: 'Stage receipt được commit; chỉ đủ world và combat/crafting Linh Tích mới tiến thêm.' },
+    HE_TU_THUC_NGHE: { tone: ['lĩnh ngộ', 'đời thường'], opening: 'Một cách tu hoặc một việc trong bếp/lò mở ra từ thao tác thật, không phải chỉ từ lời giới thiệu.', act: 'Làm thử, quan sát sai khác và hỏi người biết nghề về điểm mình vừa bỏ sót.', close: 'Familiarity/knowledge được ghi; không ép học đường tu không tương hợp.' },
+    BI_CANH_KHAM_PHA: { tone: ['khám phá', 'kỳ dị'], opening: 'Địa hình, vật liệu hoặc dị tượng trong Bí Cảnh để lại một đầu mối có thể kiểm chứng.', act: 'Khảo sát mốc, đối chiếu môi trường và chọn tiếp tục hoặc rút lui với checkpoint nguyên vẹn.', close: 'Khám phá được lưu theo node; rời Bí Cảnh không tự biến thành thất bại vĩnh viễn.' },
+    ENGINE_AUTHORED: { tone: ['lặng', 'đời thường'], opening: 'Một cuộc gặp không cần đại sự vẫn có thể để lại thay đổi trong cách nhìn và cách nhớ.', act: 'Ở lại, trò chuyện hoặc giúp một việc vừa sức; từ chối không bị phán xét.', close: 'Duyên Quả được ghi bằng memory/state, không buộc phải đổi thành tài nguyên.' },
+    CATALOG_V2: { tone: ['thiên hạ', 'đời thường'], opening: 'Một việc đã được ghi rõ trong đời sống thiên hạ xuất hiện đúng world-state và địa điểm của nó.', act: 'Tìm hiểu hoàn cảnh, thực hiện hành động cụ thể và giữ quyền lựa chọn trung tính.', close: 'State, reward policy và aftermath được commit theo đúng entry; không có nút hoàn thành rỗng.' }
+};
+const specialReward = { ART01: 'RELIC_CUSTODY:RELIC-THIEN-KHUYET-NGOC', ART02: 'RELIC_CUSTODY:RELIC-TINH-HAI-LA-BAN', ART03: 'RELIC_CUSTODY:RELIC-SO-TU-TAN-HOA', ART04: 'RELIC_CUSTODY:RELIC-CO-MA-TIEN', ART05: 'RELIC_CUSTODY:RELIC-PHUONG-LINH-VU', ART06: 'RELIC_CUSTODY:RELIC-NGHICH-LAN-CO-LONG', 'CD-LIFE-01': 'KEEPSAKE:KEEP-TUI-VAI-VA-BA-LAN', 'CD-WARM-01': 'DIRECT:MAT-HAT-MUA-MUON', 'CD-JOY-01': 'DIRECT:MAT-MANH-DEN-HOI', 'CD-LETTER-01': 'KEEPSAKE:KEEP-BAN-SAO-THU-CU', 'CD-RESTORE-01': 'DIRECT:SEED-XICH-DIEP*3+MAT-NHAM-TAM-THAO*2', 'CD-COMMUNITY-01': 'DIRECT:TOOL-DEN-TAM-DUNG*1+MAT-THANH-TI*3', 'CD-SOCIAL-01': 'DIRECT:PILL-HOI-KHI*1', 'CD-CHILD-01': 'RECIPE:RECIPE-MAU-DIEU-CAM-XUYEN' };
+function explicitDefinition(e) {
+    const v = familyVoice[e.family] || familyVoice.ENGINE_AUTHORED;
+    const incoming = JourneyRegistry_1.JOURNEY_EDGES.filter(x => x.to === e.id).map(x => x.from);
+    const origin = incoming.length ? ` Cơ Duyên này chỉ mở sau một trong các đầu mối: ${incoming.join(', ')}.` : ' Đây là entry point độc lập của family.';
+    const subject = `“${e.title}”`;
+    return { id: e.id, version: e.version, title: e.title, family: e.family, tone: v.tone, once: true, aliases: [], entry: {}, startNode: 'ENTRY', rewardPolicy: specialReward[e.id] || 'NO_ITEM:KNOWLEDGE_MEMORY_STATE', migration: {}, nodes: [
+            { id: 'ENTRY', title: `Khởi duyên · ${e.title}`, text: `${v.opening} Dấu mốc trước mắt được gọi là ${subject}.${origin}`, actions: [{ id: 'OBSERVE', label: `Tìm hiểu ${subject}`, next: 'ACTION' }, { id: 'LEAVE', label: 'Ghi lại rồi rời đi', next: 'PAUSE' }] },
+            { id: 'PAUSE', title: `Dấu hẹn · ${e.title}`, text: `Đầu mối ${subject} được giữ nguyên trong Vân Du Lục. Rời đi lúc này không xóa điều đã biết và không phát thưởng.`, actions: [{ id: 'RESUME', label: 'Trở lại đầu mối', next: 'ACTION' }] },
+            { id: 'ACTION', title: `Thực hiện · ${e.title}`, text: `${v.act} Trọng tâm của lần này là ${subject}; kết quả không được dùng thay cho một Cơ Duyên khác cùng family.`, actions: [{ id: 'ACT', label: `Tiếp tục ${e.title}`, next: 'DECISION' }, { id: 'STEP_BACK', label: 'Tạm dừng, chưa kết luận', next: 'PAUSE' }] },
+            { id: 'DECISION', title: `Duyên quyết · ${e.title}`, text: `Phần việc của ${subject} đã đủ để kết luận trong giới hạn nguồn hiện có. Có thể xác nhận kết quả hoặc quay lại đối chiếu thêm.`, actions: [{ id: 'CONFIRM', label: 'Xác nhận kết quả', next: 'RESOLUTION' }, { id: 'RECHECK', label: 'Đối chiếu lại', next: 'ACTION' }] },
+            { id: 'RESOLUTION', title: `Duyên quả · ${e.title}`, text: `${v.close} Duyên Quả này thuộc riêng ${subject} và mang receipt ${e.id}.`, actions: [{ id: 'COMMIT', label: `Ghi lại ${e.title}`, resolve: true, setFlags: { outcome: e.id } }] }
+        ] };
+}
+exports.PRODUCTION_JOURNEYS = [...JourneyCatalog_1.JOURNEYS, ...JourneyRegistry_1.JOURNEY_REGISTRY.filter(x => x.id !== JourneyCatalog_1.MOON_NAME_JOURNEY_ID).map(explicitDefinition)];
+const productionJourneyById = (id) => exports.PRODUCTION_JOURNEYS.find(x => x.id === id || x.aliases.includes(id));
+exports.productionJourneyById = productionJourneyById;
+function auditProductionJourneys() { const errors = []; const ids = new Set(), texts = new Set(); for (const d of exports.PRODUCTION_JOURNEYS) {
+    if (ids.has(d.id))
+        errors.push(`duplicate definition ${d.id}`);
+    ids.add(d.id);
+    if (!d.rewardPolicy)
+        errors.push(`missing reward ${d.id}`);
+    if (d.nodes.length < 3)
+        errors.push(`short definition ${d.id}`);
+    for (const n of d.nodes) {
+        if (texts.has(n.text))
+            errors.push(`duplicate exact node text ${d.id}:${n.id}`);
+        texts.add(n.text);
+        if (!n.actions.length)
+            errors.push(`no action ${d.id}:${n.id}`);
+    }
+} if (exports.PRODUCTION_JOURNEYS.length !== 169)
+    errors.push(`expected 169 playable definitions, got ${exports.PRODUCTION_JOURNEYS.length}`); for (const r of JourneyRegistry_1.JOURNEY_REGISTRY)
+    if (!ids.has(r.id))
+        errors.push(`registry without definition ${r.id}`); return errors; }

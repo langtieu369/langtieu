@@ -1,0 +1,45 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const fs_1 = __importDefault(require("fs"));
+const path_1 = __importDefault(require("path"));
+const p = path_1.default.join(process.cwd(), 'data', 'owner-control-test.sqlite');
+for (const f of [p, p + '-wal', p + '-shm'])
+    try {
+        fs_1.default.unlinkSync(f);
+    }
+    catch { }
+process.env.DB_PATH = p;
+const { initDatabase } = require('./database/database'), db = require('./database/database').default, { userRepository } = require('./database/repositories/UserRepository'), { inventoryRepository } = require('./database/repositories/InventoryRepository'), { ownerControlService } = require('./services/OwnerControlService'), { ITEMS } = require('./config/GameCatalog');
+function ok(x, m) { if (!x)
+    throw new Error(m); }
+async function main() {
+    initDatabase();
+    userRepository.create('owner', 'Owner');
+    userRepository.create('target', 'Target');
+    ok(ownerControlService.adjustCurrency('owner', 'target', 'LT', 'GRANT', 900).ok && userRepository.get('target').coin_ha_pham === 1000, 'grant LT');
+    ok(!ownerControlService.adjustCurrency('owner', 'target', 'LT', 'REVOKE', 1001).ok && userRepository.get('target').coin_ha_pham === 1000, 'reject insufficient LT');
+    ok(!ownerControlService.adjustCurrency('owner', 'target', 'CPLT', 'SET', 12).ok && userRepository.get('target').knb === 0, 'direct CPLT mutation blocked');
+    const item = Object.values(ITEMS).find((x) => x.sources?.length && x.uses?.length);
+    ok(ownerControlService.adjustItem('owner', 'target', item.id, 'GRANT', 3).ok && inventoryRepository.quantity('target', item.id) === 3, 'grant item');
+    ok(!ownerControlService.adjustItem('owner', 'target', item.id, 'REVOKE', 4).ok, 'reject insufficient item');
+    ok(ownerControlService.adjustItem('owner', 'target', item.id, 'REVOKE', 2).ok && inventoryRepository.quantity('target', item.id) === 1, 'revoke item');
+    const beforeTest = { lt: userRepository.get('target').coin_ha_pham, cplt: userRepository.get('target').knb };
+    ownerControlService.bindTest('owner', 'target');
+    ok(userRepository.get('target').coin_ha_pham === beforeTest.lt && userRepository.get('target').knb === beforeTest.cplt, 'test bind does not mint real assets');
+    ok(db.prepare("SELECT state_json FROM test_namespaces WHERE user_id='target'").get().state_json.includes('virtualAssets'), 'test namespace overlay');
+    const preview = await ownerControlService.previewReset('owner');
+    ok(preview.ok && fs_1.default.existsSync(path_1.default.join(path_1.default.dirname(p), 'snapshots', `world-${preview.id}.sqlite`)), 'verified snapshot exists');
+    ok(ownerControlService.maintenanceLocked(), 'maintenance locked');
+    const result = ownerControlService.confirmReset('owner', preview.id, preview.nonce);
+    ok(result.ok, 'full world reset');
+    ok(db.prepare('SELECT COUNT(*) n FROM users').get().n === 0, 'player state cleared');
+    ok(db.prepare("SELECT value FROM world_meta WHERE key='world_epoch'").get().value === '2', 'world epoch switched');
+    ok(db.prepare("SELECT state FROM world_reset_jobs WHERE id=?").get(preview.id).state === 'COMPLETED', 'reset receipt completed');
+    ok(db.prepare('SELECT COUNT(*) n FROM admin_audit').get().n > 0, 'immutable audit preserved');
+    ok(db.prepare("SELECT value FROM owner_settings WHERE key='TEST_ACCOUNT_ID'").get().value === 'target', 'test binding preserved');
+    console.log('✅ Owner control runtime: assets/snapshot/nonce/FULL_WORLD/epoch/audit PASS');
+}
+main().catch(e => { console.error(e); process.exit(1); });
