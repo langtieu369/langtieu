@@ -2,7 +2,7 @@
  * Quyền tối cao của Thương Mang Thiên Hạ.
  * Không dùng quyền Administrator của guild để thay thế kiểm tra này.
  */
-export const BOT_OWNER_ID = '724608013981450351';
+export const BOT_OWNER_ID = '765165427315048488';
 
 export function isBotOwner(userId: string): boolean {
   return userId === BOT_OWNER_ID;
